@@ -1,0 +1,446 @@
+블롭+CDN생성
+CDN URL 
+블롭주소 : 
+https://user15storage.blob.core.windows.net/img/6.jpg
+https://user15storage.blob.core.windows.net/img/7.jpg
+ 확인 완료 
+엔드포인트 주소 : (예시) https://user16cdn.azureedge.net/img/6.JPG
+https://user15CDNdemo1.azureedge.net/img/6.jpg
+https://user15CDNdemo1.azureedge.net/img/7.jpg
+-------------------------------------------------------------------------------
+<Admin 서버 작업>
+sudo su -
+apt-get update -y
+apt-get install azure-cli -y
+az login
+ URL복사, 코드 복사 
+"cloudName": "AzureCloud",
+    "homeTenantId": "029675e3-1fa6-457d-a5cd-bdabb958e953",
+    "id": "6da25f66-689f-49b9-ab5e-4d9619cce313", *********
+    "isDefault": true,
+    "managedByTenants": [],
+    "name": "종량제3",
+    "state": "Enabled",
+    "tenantId": "029675e3-1fa6-457d-a5cd-bdabb958e953",
+    "user": {
+      "name": "user15@gkn2025hotmail.onmicrosoft.com",
+      "type": "user"
+- TenantId": 029675e3-1fa6-457d-a5cd-bdabb958e953
+- 구독id" : 6da25f66-689f-49b9-ab5e-4d9619cce313
+az account set --subscription="6da25f66-689f-49b9-ab5e-4d9619cce313"
+az ad sp create-for-rbac --role="Contributor" --scopes="/subscriptions/6da25f66-689f-49b9-ab5e-4d9619cce313"
+결과값
+  "appId": "33dbe176-96f7-4a95-842d-32a8c0385368",******
+  "displayName": "azure-cli-2021-07-28-01-17-56",
+  "name": "33dbe176-96f7-4a95-842d-32a8c0385368",
+  "password": "xpJpqX6Zx78li_lzPPifHUc~WzzQ7iyPl3", *******
+  "tenant": "029675e3-1fa6-457d-a5cd-bdabb958e953"
+<Azure 인증을 위한 변수 등록>
+export ARM_CLIENT_ID="33dbe176-96f7-4a95-842d-32a8c0385368" 
+export ARM_CLIENT_SECRET="xpJpqX6Zx78li_lzPPifHUc~WzzQ7iyPl3" 
+export ARM_SUBSCRIPTION_ID="6da25f66-689f-49b9-ab5e-4d9619cce313" 
+export ARM_TENANT_ID="029675e3-1fa6-457d-a5cd-bdabb958e953"
+mkdir final
+cd final
+ 
+<테라폼 설치>
+wget https://releases.hashicorp.com/terraform/1.0.3/terraform_1.0.3_linux_amd64.zip
+apt install unzip 
+unzip terraform_1.0.3_linux_amd64.zip
+cp terraform /bin
+terraform version ## Version check
+ssh keygen 설정 복붙 
+-----------------------------
+Azure LB 생성 순서
+Resource Group 생성
+VNET, Subnet 생성
+LB Public IP 생성
+LB 생성 (LB, LB Rule, Health Probe)
+Network Security Group 생성
+NIC 생성(VM1, VM2를 위해 2개 생성)
+NIC과 NSG(Network Security Group)연결
+NIC과 LB Backendpool에 연결
+NIC과 LB NAT Rule 연결
+RSA Key생성(ssh-keygen 명령어)
+사용자 데이터 부분에서 실행할 스트립트 생성(web.sh)
+Storage Account 생성(Diagnostic log 저장용)
+Availability Set 생성(LB에 VM을 연결하려면, VM들은 반드시 AS설정 필요!)
+VM1, VM2 생성
+설정끝
+--------------------------vi편집기로 
+vi main.tf  (파일명)
+provider "azurerm" {
+        features {}
+}
+---------------------
+ terraform init
+------------------------
+vi resource.tf
+resource "azurerm_resource_group" "user15-rg" {
+    name     = "user15rg"
+    location = "koreacentral"
+    tags = {
+        environment = "Terraform Demo"
+    }
+}
+----------------------
+terraform apply --auto-approve
+---------------------------
+vi vnet.tf
+resource "azurerm_virtual_network" "user15-vnet" {
+  name   = "user01-myvnet"
+  address_space   = ["15.0.0.0/16"]
+  location   = azurerm_resource_group.user15-rg.location
+  resource_group_name  = azurerm_resource_group.user15-rg.name
+}
+---------------------------
+vi subnet.tf
+resource "azurerm_subnet" "user15-subnet1" {
+    name           = "user15-subnet1"
+    resource_group_name  = azurerm_resource_group.user15-rg.name
+    virtual_network_name  = azurerm_virtual_network.user15-vnet.name
+    address_prefixes           = ["15.0.1.0/24"]
+}
+----------------
+5.Public IP (VIP)
+vi publicip.tf
+resource "azurerm_public_ip" "user15-pip" {
+      name                = "user15-pip"
+      location            = azurerm_resource_group.user15-rg.location
+      resource_group_name = azurerm_resource_group.user15-rg.name
+     allocation_method   = "Static"
+     domain_name_label   = azurerm_resource_group.user15-rg.name
+     tags = {      environment = "staging"
+     }
+}
+---------------------------
+6. lb.tf 
+resource "azurerm_lb" "user15-lb" {
+  name                    = "user15-lb"
+  location                = azurerm_resource_group.user15-rg.location
+  resource_group_name     = azurerm_resource_group.user15-rg.name
+  frontend_ip_configuration {
+  name                  = "user15-pip"
+  public_ip_address_id   = azurerm_public_ip.user15-pip.id
+  }
+}
+---------------------
+오류 나지만 무시 
+7. lbbep.tf
+resource "azurerm_lb_backend_address_pool" "user15-bep" {
+  name   = "user15-bep"
+  ## resource_group_name = azurerm_resource_group.user15-rg.name (삭제됐는지확인)
+  loadbalancer_id     = azurerm_lb.user15-lb.id
+}
+---------------'
+8. 
+vi lbprobe.tf  (헬스체크)
+resource "azurerm_lb_probe" "user15-lb-probe" {
+  resource_group_name  = azurerm_resource_group.user15-rg.name
+  loadbalancer_id  = azurerm_lb.user15-lb.id
+  name    = "http-probe"
+  protocol   = "Http"  
+  request_path   = "/"
+  port    = 80
+}
+-----------------------
+9.
+vi lbrule.tf
+resource "azurerm_lb_rule" "lb-rule" {
+  resource_group_name    = azurerm_resource_group.user15-rg.name
+  loadbalancer_id    = azurerm_lb.user15-lb.id
+  name      = "http"  
+  protocol     = "Tcp"
+  frontend_port    = 80  
+  backend_port     = 80
+  backend_address_pool_id   = azurerm_lb_backend_address_pool.user15-bep.id
+  frontend_ip_configuration_name  = "user15-pip"
+  probe_id     = azurerm_lb_probe.user15-lb-probe.id
+}
+-----------------
+10. nsg
+vi nsg.tf
+resource "azurerm_network_security_group" "user15-nsg" {
+   name                      = "user15-nsg"
+   location                  = azurerm_resource_group.user15-rg.location
+   resource_group_name       = azurerm_resource_group.user15-rg.name
+  security_rule {
+  name                            = "SSH"
+  priority                        = 1001
+  direction                       = "Inbound"
+  access                          = "Allow"
+  protocol                        = "Tcp"
+  source_port_range               = "*"
+  destination_port_range          = "22"
+  source_address_prefix           = "*"
+  destination_address_prefix      = "*"
+  }
+  security_rule {
+  name                            = "HTTP"
+  priority                        = 2001
+  direction                       = "Inbound"
+  access                          = "Allow"
+  protocol                        = "Tcp"
+  source_port_range               = "*"
+  destination_port_range          = "80"
+  source_address_prefix           = "*"
+  destination_address_prefix      = "*"
+  }
+    tags = {        environment = "Terraform Demo"
+   }
+}
+-----------------------------------------------------------
+vi web.sh
+#!/bin/bash
+apt-get update -y
+apt-get install  apache2  -y
+service apache2 start
+-----------
+web.sh 파일 만드시고 , ssh-keygen (엔터 3번) 한 후에 vmss.tf 생성 후 terraform apply 실행
+-------------------------------------------------
+11.natrule1.tf
+vi natrule1.tf
+resource "azurerm_lb_nat_rule" "natrule1" {
+  resource_group_name            = azurerm_resource_group.user15-rg.name
+  loadbalancer_id                = azurerm_lb.user15-lb.id 
+  name                           = "web1SSH"
+  protocol                       = "Tcp"
+  frontend_port                  = 50001
+  backend_port                   = 22
+  frontend_ip_configuration_name = "user15-pip"
+}
+---------------------------
+vi natrule2.tf
+resource "azurerm_lb_nat_rule" "natrule2" {
+  resource_group_name            = azurerm_resource_group.user15-rg.name
+  loadbalancer_id                = azurerm_lb.user15-lb.id
+  name                           = "web2SSH"
+  protocol                       = "Tcp"
+  frontend_port                  = 50002
+  backend_port                   = 22
+  frontend_ip_configuration_name = "user15-pip"
+}
+-----------------------
+13.  
+vi mynic1.tf
+resource "azurerm_network_interface" "nic1" {
+    name                = "myNIC1"
+    location = azurerm_resource_group.user15-rg.location
+    resource_group_name = azurerm_resource_group.user15-rg.name
+    ip_configuration {
+        name                          = "myNicConfiguration1"
+        subnet_id                     = azurerm_subnet.user15-subnet1.id
+        private_ip_address_allocation = "Dynamic"
+    }
+    tags = {
+        environment = "Terraform Demo"
+    }
+}
+resource "azurerm_network_interface_security_group_association" "nic-nsg-association" {
+  network_interface_id      = azurerm_network_interface.nic1.id
+  network_security_group_id = azurerm_network_security_group.user15-nsg.id
+}
+resource "azurerm_network_interface_backend_address_pool_association" "backendPool" {
+  network_interface_id    = azurerm_network_interface.nic1.id
+  ip_configuration_name   = "myNicConfiguration1"
+  backend_address_pool_id = azurerm_lb_backend_address_pool.user15-bep.id 
+}
+resource "azurerm_network_interface_nat_rule_association" "natrule1" {
+  network_interface_id  = azurerm_network_interface.nic1.id
+  ip_configuration_name = "myNicConfiguration1"
+  nat_rule_id           = azurerm_lb_nat_rule.natrule1.id
+}
+----------------------
+14.mynic2.tf
+vi mynic2.tf
+resource "azurerm_network_interface" "nic2" {
+    name                = "myNIC2"
+    location = azurerm_resource_group.user15-rg.location
+    resource_group_name = azurerm_resource_group.user15-rg.name
+    ip_configuration {
+        name                          = "myNicConfiguration2"
+        subnet_id                     = azurerm_subnet.user15-subnet1.id
+        private_ip_address_allocation = "Dynamic"
+    }
+    tags = {
+        environment = "Terraform Demo"
+    }
+}
+resource "azurerm_network_interface_security_group_association" "nic-nsg-association2" {
+  network_interface_id      = azurerm_network_interface.nic2.id
+  network_security_group_id = azurerm_network_security_group.user15-nsg.id
+}
+resource "azurerm_network_interface_backend_address_pool_association" "backendPool2" {
+  network_interface_id    = azurerm_network_interface.nic2.id
+  ip_configuration_name   = "myNicConfiguration2"
+  backend_address_pool_id = azurerm_lb_backend_address_pool.user15-bep.id 
+}
+resource "azurerm_network_interface_nat_rule_association" "natrule2" {
+  network_interface_id  = azurerm_network_interface.nic2.id
+  ip_configuration_name = "myNicConfiguration2"
+  nat_rule_id           = azurerm_lb_nat_rule.natrule2.id
+}
+---------------------------------------
+vi web.sh
+#!/bin/bash
+apt-get update -y
+apt-get install  apache2  -y
+service apache2 start
+echo "<html>" > /var/www/html/index.html
+echo "Hello World from $(hostname -f)" >> /var/www/html/index.html
+echo "<img src=\"<CDN URL>\">" >> /var/www/html/index.html
+echo "</html>" >> /var/www/html/index.html
+-----------
+web.sh 파일 만드시고 , ssh-keygen (엔터 3번) 한 후에 terraform apply 실행
+-----------------
+15.as.tf
+vi as.tf
+resource "azurerm_availability_set" "avset" {
+ name                         = "avset"
+ location                     = azurerm_resource_group.user15-rg.location
+ resource_group_name          = azurerm_resource_group.user15-rg.name
+ platform_fault_domain_count  = 2
+ platform_update_domain_count = 2
+ managed                      = true
+}
+----------------------------
+16.myDiagStorage.tf
+vi myDiagStorage.tf
+resource "azurerm_storage_account" "mystorageaccount" {
+    name                = "user15vm1diagestorage1"
+    resource_group_name = azurerm_resource_group.user15-rg.name
+    location = azurerm_resource_group.user15-rg.location
+    account_replication_type = "LRS"
+    account_tier = "Standard"
+    tags = {
+        environment = "Terraform Demo"
+    }
+}
+-------------------------
+17.vm1.tf
+vi vm1.tf
+resource "azurerm_virtual_machine" "web1" {
+    name                  = "user15web1"
+    location              = azurerm_resource_group.user15-rg.location
+    resource_group_name   = azurerm_resource_group.user15-rg.name
+    availability_set_id   = azurerm_availability_set.avset.id
+    network_interface_ids = [azurerm_network_interface.nic1.id]
+    vm_size               = "Standard_DS1_v2"
+    storage_os_disk {
+        name              = "myOsDisk"
+        caching           = "ReadWrite"
+        create_option     = "FromImage"
+        managed_disk_type = "Premium_LRS"
+    }
+    storage_image_reference {
+        publisher = "Canonical"
+        offer     = "UbuntuServer"
+        sku       = "16.04.0-LTS"
+        version   = "latest"
+    }
+ os_profile {
+        computer_name  = "user15web1"
+        admin_username = "dayoung"    ## 아래 34번 라인의 계정이름과 동일해야 함
+        admin_password = "Mondo@260444"     ## 12자리이상, 특수문자, 숫자, 대문자 조합으로 생성 필요
+    custom_data= file("web.sh")     ## Terraform 실행하는 서버에 존재해야 함, 실행은 만들어지는 VM에서
+    }
+ os_profile_linux_config {
+        disable_password_authentication = false
+        ssh_keys {
+     path     = "/home/dayoung/.ssh/authorized_keys"
+        key_data = file("~/.ssh/id_rsa.pub")
+        }
+    }
+    boot_diagnostics {
+        enabled     = "true"
+        storage_uri = azurerm_storage_account.mystorageaccount.primary_blob_endpoint
+    }
+    tags = {
+        environment = "Terraform Demo"
+    }
+}
+---------------------
+18.vm2.tf
+vi vm2.tf
+resource "azurerm_virtual_machine" "web2" {
+    name                  = "user15web2"
+    location              = azurerm_resource_group.user15-rg.location
+    resource_group_name   = azurerm_resource_group.user15-rg.name
+    availability_set_id   = azurerm_availability_set.avset.id
+    network_interface_ids = [azurerm_network_interface.nic2.id]
+    vm_size               = "Standard_DS1_v2"
+    storage_os_disk {
+        name              = "myOsDisk2"
+        caching           = "ReadWrite"
+        create_option     = "FromImage"
+        managed_disk_type = "Premium_LRS"
+    }
+    storage_image_reference {
+        publisher = "Canonical"
+        offer     = "UbuntuServer"
+        sku       = "16.04.0-LTS"
+        version   = "latest"
+    }
+ os_profile {
+        computer_name  = "user15web2"
+        admin_username = "dayoung"    ## 아래 34번 라인의 계정이름과 동일해야 함
+        admin_password = "Mondo@260444"     ## 12자리이상, 특수문자, 숫자, 대문자 조합으로 생성 필요
+    custom_data= file("web.sh")     ## Terraform 실행하는 서버에 존재해야 함, 실행은 만들어지는 VM에서
+    }
+ os_profile_linux_config {
+        disable_password_authentication = false
+        ssh_keys {
+                path     = "/home/dayoung/.ssh/authorized_keys"
+        key_data = file("~/.ssh/id_rsa.pub")
+        }
+    }
+    boot_diagnostics {
+        enabled     = "true"
+        storage_uri = azurerm_storage_account.mystorageaccount.primary_blob_endpoint
+    }
+    tags = {
+        environment = "Terraform Demo"
+    }
+}
+-------------------추가
+user15admin 가상머신의 | 네트워킹> SSH 속성을 변경 
+SSH 누르고  ip adress를 내 ip로 교체 
+user15-nsg
+네트워크 보안 그룹 의 인바운드 보안 규칙도 내 ip로 교체 
+추가 젠킨스 아이피 22번 포트로 허용하도록 추가(web1,2) 
+ 
+-----------------------
+로드밸런서 
+인바운드 NAT 규칙 
+접속확인 : 
+ssh -i <RSA파일> 사용자명@IP주소 -p 포트주소
+ssh -i ~/.ssh/id_rsa azureuser@XXX.XXX.XXX.XXX -p 50001 
+ssh -i ~/.ssh/id_rsa dayoung@52.141.58.164 -p 50001
+ssh -i ~/.ssh/id_rsa dayoung@52.141.58.164 -p 50002
+최종 결과물 확인
+부하 분상장치의 공인IP주소를 웹 브라우저에서 확인해 보시면 됩니다.
+------------------------------------------------------------------------------------------
+<<젠킨스>>>   8OIwjV7h677d
+ user15rg + 리소스 만들기
+  - 리소스 만들기 + (marketplace에 jenkins bitnami  검색해서 만들기 )
+ 
+가상머신 이름 : user15-jenkins
+dayoung@52.141.1.47  (jenkins)
+(VM 생성 후 5분 정도 지나서 확인 필요 – 초기 설정에 시간이 걸리기 때문)
+sudo cat /home/bitnami/bitnami_credentials
+password 확인 ; 8OIwjV7h677d
+portal에서 jenkins 네트워킹 > NIC 공용 IP: 52.141.1.47
+52.141.1.47 인터넷 창에 복사후 연결 > user > pass 위에서 확인한거 넣기 
+대시보드 > 플러그인 관리 > 상단 설치 가능 > ssh 검색 > Publish Over SSH 체크 후 아래 다운로드 
+ 리스타트 체크 시 > 다시 연결
+create job 
+배포대상에 대한 등록 : 시스템 설정 
+아래로 내려가 Publish over SSH
+SSH추가 
+52.141.58.164 (LB 인바운드 나트규칙에서 port 확인) 
+user15-nsg | 인바운드 보안 규칙에 SSH 22 TCP, 내 ip( 218.50.242.246) 추가 
++ 젠킨스 ip도 추가 (52.141.1.47) 
+나머진 Jenkins 배포 파일 따라하기 
+-------------------
+github repository 2개 만들기 
+ner repo > user15repo2(이름변경 등) 
